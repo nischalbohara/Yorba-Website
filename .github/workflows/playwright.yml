@@ -1,38 +1,38 @@
-name: Playwright Tests 
- 
-on: 
-  push: 
-    branches: [main] 
-  pull_request: 
-    branches: [main] 
-  workflow_dispatch: 
- 
-jobs: 
-  test: 
-    timeout-minutes: 60 
-    runs-on: ubuntu-latest 
- 
-    outputs: 
-      total: ${{ steps.test-results.outputs.total }} 
-      passed: ${{ steps.test-results.outputs.passed }} 
-      failed: ${{ steps.test-results.outputs.failed }} 
-      skipped: ${{ steps.test-results.outputs.skipped }} 
- 
-    steps: 
-      - name: Checkout Repository 
-        uses: actions/checkout@v4 
- 
-      - name: Set up Node.js 
-        uses: actions/setup-node@v4 
- 
-      - name: Install Dependencies 
-        run: npm ci 
- 
-      - name: Install Playwright Browsers 
-        run: npx playwright install --with-deps chromium 
- 
-      - name: Run Playwright Tests 
-        run: npx playwright test 
+name: Playwright Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+
+    outputs:
+      total: ${{ steps.test-results.outputs.total }}
+      passed: ${{ steps.test-results.outputs.passed }}
+      failed: ${{ steps.test-results.outputs.failed }}
+      skipped: ${{ steps.test-results.outputs.skipped }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright Tests
+        run: npx playwright test
 
       - name: Get Test Results
         if: always()
@@ -40,6 +40,15 @@ jobs:
         run: |
           node - <<'EOF'
           const fs = require('fs');
+
+          if (!fs.existsSync('test-results.json')) {
+            console.error('test-results.json not found — Playwright run may have been killed before reporting.');
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              `total=0\npassed=0\nfailed=0\nskipped=0\n`
+            );
+            process.exit(0);
+          }
 
           const data = JSON.parse(
             fs.readFileSync('test-results.json', 'utf8')
@@ -80,23 +89,23 @@ jobs:
             `skipped=${skipped}\n`
           );
           EOF
- 
-      - name: Upload Snapshots 
-        uses: actions/upload-artifact@v4 
-        if: always() 
-        with: 
-          name: updated-snapshots 
-          path: tests/**/*-snapshots/** 
-          retention-days: 7 
- 
-      - name: Upload Test Results 
-        uses: actions/upload-artifact@v4 
-        if: ${{ !cancelled() }} 
-        with: 
-          name: playwright-report 
-          path: playwright-report/ 
-          retention-days: 30 
- 
+
+      - name: Upload Snapshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: updated-snapshots
+          path: tests/**/*-snapshots/**
+          retention-days: 7
+
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 30
+
   notify-slack:
     name: Send Slack Notification
     needs: test
