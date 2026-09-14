@@ -1,117 +1,128 @@
-name: Playwright Tests
+name: Playwright Tests 
+ 
+on: 
+  push: 
+    branches: [main] 
+  pull_request: 
+    branches: [main] 
+  workflow_dispatch: 
+ 
+jobs: 
+  test: 
+    timeout-minutes: 60 
+    runs-on: ubuntu-latest 
+ 
+    outputs: 
+      total: ${{ steps.test-results.outputs.total }} 
+      passed: ${{ steps.test-results.outputs.passed }} 
+      failed: ${{ steps.test-results.outputs.failed }} 
+      skipped: ${{ steps.test-results.outputs.skipped }} 
+ 
+    steps: 
+      - name: Checkout Repository 
+        uses: actions/checkout@v4 
+ 
+      - name: Set up Node.js 
+        uses: actions/setup-node@v4 
+ 
+      - name: Install Dependencies 
+        run: npm ci 
+ 
+      - name: Install Playwright Browsers 
+        run: npx playwright install --with-deps chromium 
+ 
+      - name: Run Playwright Tests 
+        run: npx playwright test 
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # ... your setup steps (Node, npm install, run tests, etc.) go here ...
-
-      - name: Extract Playwright Results & Failures
+      - name: Get Test Results
         if: always()
-        id: playwright-stats
+        id: test-results
         run: |
-          node -e '
-            const fs = require("fs");
-            if (!fs.existsSync("results.json")) process.exit(0);
-            const data = JSON.parse(fs.readFileSync("results.json", "utf8"));
-            let passed = 0, failed = 0, flaky = 0;
-            let failedNames = [];
+          node - <<'EOF'
+          const fs = require('fs');
 
-            function jsonEscape(str) {
-              return str
-                .replace(/\\/g, "\\\\")
-                .replace(/"/g, "\\\"")
-                .replace(/\r?\n/g, " ");
-            }
+          const data = JSON.parse(
+            fs.readFileSync('test-results.json', 'utf8')
+          );
 
-            function countSpecs(suite) {
-              if (suite.specs) {
-                suite.specs.forEach(spec => {
-                  const statuses = spec.tests.flatMap(t => t.results.map(r => r.status));
-                  if (statuses.includes("unexpected")) {
-                    if (statuses.includes("expected")) {
-                      flaky++;
-                    } else {
-                      failed++;
-                      if (failedNames.length < 5) failedNames.push(spec.title);
-                    }
-                  } else if (statuses.includes("expected")) {
-                    passed++;
-                  }
-                });
+          let passed = 0;
+          let failed = 0;
+          let skipped = 0;
+          let total = 0;
+
+          function countSuite(suite) {
+            for (const spec of suite.specs || []) {
+              for (const test of spec.tests || []) {
+                total++;
+
+                const status = test.status;
+
+                if (status === 'expected') passed++;
+                else if (status === 'unexpected') failed++;
+                else if (status === 'skipped') skipped++;
               }
-              if (suite.suites) suite.suites.forEach(countSpecs);
             }
 
-            if (data.suites) data.suites.forEach(countSpecs);
-
-            const failedList = failedNames.length > 0
-              ? failedNames.map(n => jsonEscape(`• ${n}`)).join("\\n")
-              : "None";
-
-            let headerText;
-            if (failed > 0) {
-              headerText = "🎭 Playwright Test Failures Detected";
-            } else if (flaky > 0) {
-              headerText = "⚠️ Playwright Tests Flaky";
-            } else {
-              headerText = "✅ Playwright Tests Passed";
+            for (const child of suite.suites || []) {
+              countSuite(child);
             }
+          }
 
-            const output = `passed=${passed}\nfailed=${failed}\nflaky=${flaky}\nfailed_specs=${failedList}\nheader_text=${headerText}\n`;
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, output);
-          '
+          for (const suite of data.suites || []) {
+            countSuite(suite);
+          }
 
-      - name: Notify Slack (Test Results)
-        if: always() && steps.playwright-stats.outputs.passed != ''
-        uses: slackapi/slack-github-action@v2.0.0
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `total=${total}\n` +
+            `passed=${passed}\n` +
+            `failed=${failed}\n` +
+            `skipped=${skipped}\n`
+          );
+          EOF
+ 
+      - name: Upload Snapshots 
+        uses: actions/upload-artifact@v4 
+        if: always() 
+        with: 
+          name: updated-snapshots 
+          path: tests/**/*-snapshots/** 
+          retention-days: 7 
+ 
+      - name: Upload Test Results 
+        uses: actions/upload-artifact@v4 
+        if: ${{ !cancelled() }} 
+        with: 
+          name: playwright-report 
+          path: playwright-report/ 
+          retention-days: 30 
+ 
+  notify-slack:
+    name: Send Slack Notification
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notify Slack with Test Results
+        if: always()
+        uses: slackapi/slack-github-action@v1.27.0
         with:
-          webhook: ${{ secrets.SLACK_WEBHOOK_URL2 }}
-          webhook-type: INCOMING_WEBHOOK
           payload: |
             {
               "blocks": [
                 {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "${{ steps.playwright-stats.outputs.header_text }}"
-                  }
-                },
-                {
                   "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Repository:*\n${{ github.repository }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Author:*\n${{ github.actor }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*PR / Commit:*\n${{ github.event.pull_request.html_url || github.sha }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Results:*\n✅ Passed: ${{ steps.playwright-stats.outputs.passed }} | ⚠️ Flaky: ${{ steps.playwright-stats.outputs.flaky }} | ❌ Failed: ${{ steps.playwright-stats.outputs.failed }}"
-                    }
-                  ]
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*GitHub Actions Test Run Complete* :rocket:\n*Repository:* ${{ github.repository }}\n*Status:* ${{ needs.test.result }}"
+                  }
                 },
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Failed Tests (Top 5):*\n${{ steps.playwright-stats.outputs.failed_specs }}"
+                    "text": "*📊 Playwright Test Summary*\n*Total:* ${{ needs.test.outputs.total }}\n*Passed:* :white_check_mark: ${{ needs.test.outputs.passed }}\n*Failed:* :x: ${{ needs.test.outputs.failed }}\n*Skipped:* :fast_forward: ${{ needs.test.outputs.skipped }}"
                   }
                 },
                 {
@@ -121,7 +132,7 @@ jobs:
                       "type": "button",
                       "text": {
                         "type": "plain_text",
-                        "text": "View Action Run & Download Report"
+                        "text": "View Workflow Run"
                       },
                       "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                     }
@@ -129,3 +140,6 @@ jobs:
                 }
               ]
             }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL2 }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
